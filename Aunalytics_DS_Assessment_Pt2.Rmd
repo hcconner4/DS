@@ -1,0 +1,159 @@
+---
+title: "Aunalytics Data Science Assessment, Part 2"
+output: html_notebook
+author: H. Clay Conner
+---
+This is a Data Science Assessment for Aunalytics. 
+
+The following outlines my solution for second problem stated:
+
+2) Perform a segmentation study on the dataset to display useful information using any visualization library.
+
+I am doing this assessment in R, using an R Notebook. 
+
+Note: I have not done a segmentation study prior to this. I looked at some online resources as to how to do this, but I am not quite sure the extent of what is typically expected. My general strategy was to perform an unsupervised learning study and see if/how the data can be segmented into clearly defined groups. 
+
+```{r}
+# Load the necessary packages
+library(tidyverse)
+library(gplots)
+library(ggfortify)
+library(factoextra)
+library(cowplot)
+library(caret) 
+```
+
+
+```{r, echo=T}
+#Load the data:
+trainingSet <- read.csv("~/Desktop/au_train.csv", header = T)
+head(trainingSet)
+```
+
+In order to start, I want to plot a principle component analysis to understand if there are any clearly defined groups that can be understood right away. 
+
+In order to do this, I will need to convert all the factor columns to a numeric column. 
+
+```{r, echo=T}
+
+cols <- which(sapply(trainingSet, is.factor)) # Check which columns are factors
+
+factors_to_numerics <- function(df) {
+  modifyList(df, lapply(df[,cols], as.numeric)) # Function to convert factors to numerics, need modifyList to append (not overwrite) existing df
+}
+
+
+num.trainingSet <- factors_to_numerics(trainingSet) # Converts all factors to numerics
+glimpse(num.trainingSet) # Check
+```
+
+All the factors got changed to numerics, but the modifyList function kept the original numeric columns as well. 
+
+Now, I am going to run a single PCA with plot to examine initial clustering patterns. The dataset will be converted to a matrix format.  
+
+```{r, echo=T}
+mat.trainingSet <- as.matrix(num.trainingSet) # Convert to matrix 
+
+pca <- prcomp(mat.trainingSet, scale. = T) # Do PCA on the matrix first, where class is a numeric
+
+autoplot(pca, # PCA plot from the matrix where class is defined as a numeric
+         data = mat.trainingSet, 
+         colour = 'class', 
+         loadings = T, 
+         loadings.label = T,
+         loadings.colour = "dark gray", 
+         loadings.label.colour = "red",
+         loadings.label.size = 4,
+         frame = T)
+```
+
+The results from the PCA plot tells us a few things. The first is that the biggest positive loadings on the first component is relationship status followed by marital status. Class and sex appear to be the biggest negative loadings on the first component. Furthermore, education and education.num show the biggest negative loadings to the second component. Its hard to tell what the biggest loading is to the second component, but it may be sex. 
+
+Overall, this helps us to group which features are likely to be most related. The algorithm suggests that there are basically three main groups (my interpretation) - relationship/marital status, education/country, and everything else (hours, occupation, cap loss/gain, class, sex and age). Because our first component explains the biggest variance of our data, perhaps marital.status and relationship might be features to start modifying. 
+
+However, because these components only explain about 25% of the variance, there is more to do beyond just modifying those features. I want to see if the the groups cluster together as easily as it looks like (top mostly dark blue cluster, middle blue/dark blue cluster, and a very small blue cluster on the left corner). I will start with a k = 3 for a kmeans algorithm.
+ 
+```{r, echo=T}
+set.seed(7)
+
+clusters <- kmeans(mat.trainingSet, centers = 3)
+
+table(clusters$cluster, as.data.frame(mat.trainingSet)$class)
+prop.table(table(clusters$cluster, as.data.frame(mat.trainingSet)$class))
+
+```
+
+This did not distinguish the classes as well as I would have initially thought. Class 1 is mostly found in cluster 2, and then a little less in 1, and then much less so in cluster 3. Similar story for class 2, so I am going to try a few different approaches. 
+
+The first is that I am going to try k between 1 and 5, and then also use the nstart parameter set to 25 which will allow R to bounce the centroids around 25 times to find the best one. Hopefully, I can find one k value that stands above the rest, and this could be shown using an elbow (sum of squares distance) plot, which I plan to do next.  
+
+```{r, echo=T}
+for(i in 1:5) {
+  clust <- kmeans(mat.trainingSet, i, nstart = 25)
+  print(table(clust$cluster, as.data.frame(mat.trainingSet)$class))
+  print(prop.table(table(clust$cluster, as.data.frame(mat.trainingSet)$class)))
+}
+
+```
+
+I am not sure this clarified anything for me. At least when k = 1:5, there is not show an obvious k value to be set on. Ill try one last thing before any modifications, plot the data.
+
+```{r, echo=T}
+
+plot.1 <- fviz_cluster(clust1, geom = "point", data = mat.trainingSet) + ggtitle("k = 1")
+plot.2 <- fviz_cluster(clust2, geom = "point",  data = mat.trainingSet) + ggtitle("k = 2")
+plot.3 <- fviz_cluster(clust3, geom = "point",  data = mat.trainingSet) + ggtitle("k = 3")
+plot.4 <- fviz_cluster(clust4, geom = "point",  data = mat.trainingSet) + ggtitle("k = 4")
+plot.5 <- fviz_cluster(clust5, geom = "point",  data = mat.trainingSet) + ggtitle("k = 5")
+
+
+plot_grid(plot.1, plot.2, plot.3, plot.4, plot.5, ncol = 2)
+```
+
+Like the tables above, I am not sure this clarifies anything unfortunately. I thought that maybe 2 or 3 centers would be best, but the algorithm does not appear to cluster them best with those parameters. The centers for each are all very close together in the middle of the bigger cluster, suggesting that the groups dont seem to get distinguised much better as we add more centers. Its possible that I missed something in the graph where the individual dots covered up other dots that were there, but were not visible, so the centers were not really as different in this way. Based on this approach, this suggests that the two classes are not as easily defined as I thought they would be. 
+
+Since this did not work well, I will try some feature engineering. I am not sure which features to focus on yet (thought about relationships/marital.status to start, but not significant enough), so for now, I will try making dummy variables for all the features, and see if the algorithm can cluster things more definitively. 
+
+```{r, echo=T}
+dummies <- dummyVars("~ .", data = trainingSet)
+
+dummy.trainingSet <- predict(dummies, trainingSet)
+
+head(dummy.trainingSet)
+```
+
+```{r, echo=T}
+dim(dummy.trainingSet)
+```
+
+Now we have a dummy training set of 110 features instead of the previous 15. Although most variables are now just 0 or 1, there are still some continuous variables present, so to make sure these dont have increased weight, I think the next step is to scale the data so numeric features dont skew the results.
+
+```{r}
+norm.dummy.trainingSet <- scale(dummy.trainingSet)
+head(norm.dummy.trainingSet)
+```
+
+This time, instead of trying to graph all the possible k values, I am going to calculate the sum of squares errors first for each k, and find the one with the least error as the k I will try.
+I will just try k = 2 through k = 20 to cover what should be our actual k value.
+
+```{r, echo=T}
+sos <- c()
+
+k <- c(2:20)
+
+set.seed(7)
+for (i in k) {
+ df <- kmeans(norm.dummy.trainingSet, centers = i, nstart = 25)
+ sos[i - 1] <- sum(df$withinss)
+}   
+
+ggplot(NULL, aes(x = k, y = sos)) +
+  geom_point() +
+  geom_line() +
+  labs(x = "Number of Clusters",
+       y = "Sum of Squared Distances")
+```
+
+Surprisingly, this does not really help either. This suggests that as we get more clusters, the sum of squares (error) distance goes down each time with no obvious end in sight. Thus, its possible that there are no clearly defined clusters like I thought there would be. 
+
+If I were to continue, I think I would try a higher level of k (perhaps 100 or 500) to see if we get any clear points in our graph at which the SOS distance becomes more consistent. Secondly, I might try to focus on one or two features that might explain the most variance and engineer those into more of a binary/dummy variable, and try again. Lastly, I might also consider getting rid of some of the other features that may not play much of a role based on the freature importance on the supervised learning side. 
