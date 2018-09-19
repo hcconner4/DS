@@ -1,0 +1,429 @@
+---
+title: "Aunalytics Data Science Assessment, Part 1"
+author: "H. Clay Conner"
+output:
+  html_document:
+    df_print: paged
+---
+
+This is a Data Science Assessment for Aunalytics. The following outlines my solution for first problem stated:
+
+1) The prediction task is to determine whether a person makes over 50K a year. Explain the performance of the model using accuracy, AUROC curve and confusion matrix. Feel free to add any other metric you see fit.
+
+I am doing this assessment in R, using an R Notebook.
+
+```{r, echo=T}
+#Load the training data
+trainingSet <- read.csv("~/Desktop/au_train.csv", header = T)
+
+#Check the data
+head(trainingSet)
+```
+
+```{r, echo=T}
+#Load the test data
+testSet <- read.csv("~/Desktop/au_test.csv", header = T)
+
+#Check the data
+head(testSet)
+```
+
+```{r, echo=T}
+#Necessary packages for my initial analysis
+library(reshape2) #reshaping data
+library(tidyverse) #data science tools
+library(caret) #machine learning 
+library(randomForest) #machine learning
+library(DMwR) #smote resampling
+
+glimpse(trainingSet)
+```
+```{r, echo=T}
+glimpse(testSet)
+```
+
+It appears as though both training and test sets got classified as a factor (discrete classes) or as numeric (continuous), which is what I would expect. 
+
+Now that we have everything loaded, I want to take a look at the structure of the dataset and check for any missing or abnormal data. I plan on doing that using a few functions as well as some visualizations in ggplot2. First, I am going to check to make sure there is no missing, infinite, or other abnormal data:
+
+```{r,echo=T}
+sum(is.na(trainingSet))
+```
+```{r, echo=T}
+any(sapply(trainingSet, is.infinite))
+```
+
+```{r, echo=T}
+any(sapply(trainingSet, is.nan))
+```
+
+There appears to be nothing missing, infinite, or otherwise abnormal in the training set. I will check the same for the test set, although I suspect there won't be any problems here either:
+
+```{r, echo=T}
+sum(is.na(testSet))
+```
+```{r, echo=T}
+any(sapply(testSet, is.infinite))
+```
+```{r, echo=T}
+any(sapply(testSet, is.nan))
+```
+
+Ok, so nothing abnormal here either. Now, I will begin to examine some of the data using some initial exploratory analysis. First of all, I want to see what the class balance is for the outcome feature - "class":
+
+```{r, echo=T}
+table(trainingSet$class)
+prop.table(table(trainingSet$class))
+```
+
+In the training set at least, there is quite an imbalance in the data, close to 3:1, which is something I should address when I run my models later. 
+
+For now, I want to examine the breakdown of the "class" variable across the different features. In other words, I want to know what the proportion of each feature between <=50K and >50k. I will use a ggplot2, a part of the tidyverse packages, to make one big graph with different facets:
+
+```{r, echo=T}
+m.trainingSet <- melt(trainingSet, id.vars = "class") #Melts the data to 'long' format
+#Plots the data
+ggplot(m.trainingSet) + 
+  facet_wrap(~variable, scales = "free") + 
+  geom_bar(aes(x=value, fill=class)) + 
+  theme(axis.text.x = element_text(angle = 45,
+                                   size = 4))
+
+```
+
+This gives us an idea of which features we may want to either reformat, or remove from our analysis. Based on these graphs, I have some initial hypotheses:
+  
+  The first is that education may be an important feature to focus on. It looks like the odds of making >50k goes up dramatically if you graduate HS.
+  
+  Another feature I have found interesting is that marital status may also play a role, but may be indicative of other things (ie age). It appears that people that are married tend have a much higher likelihood of being >50K. 
+  
+  Perhaps related, age shows that if you are middle age, as oppposed to being younger or older, there is an increased likelihood of earning >50k. 
+  
+  Lastly, I also noticed that those that work 40 hours or less tend to have a much less likelihood of making >50k.
+  
+I want to check some of the numerical data via boxplots to check the overall variance, and make sure there is no significant scaling issues we may have to deal with, although I suspect that there is especially in the cap.gains and losses. 
+
+```{r, echo=T}
+num_train <- select_if(trainingSet, is.numeric)
+head(num_train)
+
+```
+```{r, echo=T}
+m.num_train <- melt(num_train)
+head(m.num_train)
+```
+```{r, echo=T}
+m.num_train <- m.num_train %>% group_by(variable) %>%
+  mutate(med = median(value)) %>%
+  mutate(avg = mean(value))
+
+ggplot(m.num_train) + 
+  facet_wrap(~variable, scales = 'free') + 
+  geom_violin(aes(x=variable, y=value)) +
+  geom_hline(aes(yintercept = med, group = variable), colour = 'red') + 
+  geom_hline(aes(yintercept = avg, group = variable), colour = 'blue') 
+```
+So the variance in capital gain and loss are pretty significant. I am thinking that we will need to scale or normalize the data. Age appears to be skewed to younger people (25-50), as I would expect.
+  
+My plan is to run an intial model to determine what my baseline accuracy is to start, and look at ways to improve it using feature selection/engineering. Right now though, my main goal is to see if the computer agrees with my assessments, or if its possible there are too many classes in those features mentioned above to pull out anything meaningful. 
+
+Therefore, I am going to use the caret package's rfe function (Recursive Feature Elimination) to select what it thinks is important. For now, I will just stay with 'Accuracy' as the metric to measure by, although I will likely move to something else later. I will use the Random Forest algorithm to start. 
+
+Lastly, I want to use smote resampling to fix the class imbalance to get a best idea of what is happening.
+
+```{r, echo=T}
+set.seed(7)
+trainingSet.smote <- SMOTE(class ~ ., data  = trainingSet)                         
+table(trainingSet.smote$class) 
+
+```
+
+Ok, so this is closer to being more balanced, less than 2:1, so this should help our accuracy metric. 
+
+Although I made the visualization, I want to get an idea of actual count for each factor level to know if there is features that should be excluded after the initial rfe for lack of data. 
+
+```{r, echo=T}
+fac_train <- select_if(trainingSet, is.factor)
+head(fac_train)
+sapply(fac_train, table) # get all counts of factors
+
+```
+
+Based on this, my thought is that there are some features that are likely to just cause more confusion for the training algorithm, like country of origin, which other than the US, has < 100 for most of the other countries ( < 0.3 % training set). So after the baseline experiment, I will likely remove it in favor of a single feature for US or not. 
+
+Now, lets look at what are the most important features initially. 
+
+***Update: After attempting to run the model, which had taken several hours and had not finished, I decided to run the following line of code to sample the training set to keep my time within a reasonable range (4-8 hours). I would normally never do this, but the code is being run on an older computer.  
+
+```{r, echo=T}
+set.seed(7)
+train.sample <- sample_n(trainingSet.smote, 20000)
+table(train.sample$class) 
+
+```
+
+Now, lets rerun our model to take a look at important features.
+
+```{r,echo=T}
+ctrl <- rfeControl(functions = rfFuncs,
+                   method = "repeatedcv",
+                   repeats = 3,
+                   number = 3,
+                   verbose = FALSE)
+
+feature.smote <- rfe(class ~ ., data = train.sample, rfeControl = ctrl)
+feature.smote
+varImp(feature.smote, scale = FALSE)
+```
+
+This initial model (%89+ accuracy) shows that most important features are as follows :
+1) capital.gain
+2) age
+3) hours.per.week
+4) education.num
+5) capital.loss
+
+This function works by making each possible factor its own feature to estimate indivdual importance. Although this may not be EXACTLY perfect to what I want, I have an idea of what features to focus on, though I may adjust others to see if it matters later. 
+
+One thing that immediately stuck out was capital.gain being the most important and capital.loss being in the top 5 - and this could be because they have such a significant variation. At some point, I will scale these to the other other features when I run the model for real, to make sure I am not misinterpreting their importance. 
+
+For now, I am going to focus on adjusting education, as the earlier graphs indicate potentially interesting segregation between those that graduated from HS, and those that did not. Furthermore, the hours.per.week feature also may play a role as I may have thought. The other important features are continuous, so I wont spend time adjusting those for now. 
+
+First, I am going to create an education feature that will depend on whether or not there is a HS graduation. Looking at the levels to see where to draw the lines:
+```{r, echo=T}
+unique(trainingSet$education)
+
+```
+
+I am going to add all the college degrees, professional degrees and the HS graduates together:
+
+```{r, echo=T}
+less.than.hs <- c("Preschool", "1st-4th", "5th-6th", "7th-8th", "9th", "10th", "11th", "12th")
+train.sample$hs <- ifelse(as.character(train.sample$education) %in% less.than.hs, 0, 1)
+head(train.sample)
+```
+
+This code is working unexpectedly (everything is assigned 1), so I need to take a look and make sure there is nothing wrong with the particular column itself. 
+
+```{r, echo=T}
+as.character(train.sample$education[1:5])
+```
+
+Ok, so each of these has an extra space before the factor level, which is why the previous code assigned everything above HS. I will take out the space using gsub. 
+
+```{r, echo=T}
+train.sample$education <- gsub('\\s+', '', train.sample$education)
+as.character(train.sample$education[1:5])
+```
+
+```{r, echo=T}
+class(train.sample$education) #this was converted to a character during the gsub process
+train.sample$education <- as.factor(train.sample$education)
+```
+Try the if else statement again:
+
+```{r, echo=T}
+train.sample$hs <- ifelse(train.sample$education %in% less.than.hs, 0, 1)
+head(train.sample)
+```
+
+This looks more accurate. I am going to add a similar one for the hours.per.week feature, and one for being married to according to my initial hypothesis. These may end up changing nothing, but I am curious to test my thought. Ill check to make sure there is no extra spaces in either, and will correct them if there are. 
+
+```{r, echo=T}
+as.character(train.sample$marital.status[1:5]) # Problems 
+as.character(train.sample$hours.per.week[1:5]) # OK, no problems
+
+train.sample$marital.status <- gsub('\\s+', '', train.sample$marital.status)
+as.character(train.sample$marital.status[1:5])
+```
+
+```{r, echo=T}
+married <- c("Married-AF-spouse", "Married-civ-spouse", "Married-spouse-absent")
+train.sample$married <- ifelse(train.sample$marital.status %in% married, 1, 0)
+train.sample$more.than.forty <- ifelse(train.sample$hours.per.week < 40, 0, 1)
+head(train.sample)
+```
+
+One last one - native.country which I will reduce to US or not. I should have just made this piece of code a function to take away the white space, and would have done so if I could do it again. 
+
+```{r, echo=T}
+as.character(train.sample$native.country[1:5]) # Problems w/ spacing 
+train.sample$native.country <- gsub('\\s+', '', train.sample$native.country)
+as.character(train.sample$native.country[1:5])
+```
+```{r, echo=T}
+train.sample$US <- ifelse(train.sample$native.country == "United-States", 1, 0)
+head(train.sample, 10)
+```
+
+Now, lets see if there was anything to my hypotheses above by removing all the features that I just summarized, including education, marital.status,  hours.per.week and native.country
+
+```{r, echo=T}
+train.sample <- subset(train.sample, select = -c(marital.status, hours.per.week, native.country, education))
+head(train.sample)
+```
+
+Looks good, so I will move on to try the feature selection again to see if my feature engineering changed anything:
+
+```{r, echo=T}
+set.seed(7)
+ctrl <- rfeControl(functions = rfFuncs,
+                   method = "repeatedcv",
+                   repeats = 3,
+                   number = 3,
+                   verbose = FALSE)
+
+feature.smote <- rfe(class ~ ., data = train.sample, rfeControl = ctrl)
+feature.smote
+varImp(feature.smote, scale = FALSE)
+```
+The interesting thing is that the accuracy did not change too much, but the US feature did show up in the top 5 features. Married showed up as #6, and 40 hours showed p at #10. This suggests that I replaced the right features from those that had lots of noise, but either my initial hypotheses were offset by the removal, or had no real impact on the accuracy, which I am surprised by. Its also possible that the capital gain and loss are outweighing everything because of their scale, and nothing else is being considered, but the importance numbers dont suggest they are significantly higher than everything else... 
+
+There might be some other things that I would normally try here - including PCA or some other exploratory pieces, but I am quickly running out of time to keep this assessment in range of the suggested time. For now, I am going to run a model and although I wont be able to try everything I normally would with that either, I can hopefully get an decent initial model to start. 
+
+I plan on running two different models - Random Forest, because of it tends to be pretty good in most roles, and a neural network because it can be very powerful in the right case. With more time, I would also try a Naive Bayes algorithm because I suspect it might do a pretty good job, and its easy to explain actionable results. 
+
+I will run them the same way, but I would normally try and tune them as best as I can for real. For now, I will just utilize a simple grid search for each, and see which one does the best out of the gate. I will also use the whole training set for these, and will quickly make the changes I did to the sample. 
+
+```{r, echo=T}
+white_space <- function(df, col) {
+  df[,col] <- gsub('\\s+', '', df[,col])
+}
+
+trainingSet$native.country <- white_space(trainingSet, "native.country")
+trainingSet$education <- white_space(trainingSet, "education")
+trainingSet$marital.status <- white_space(trainingSet, "marital.status")
+trainingSet$class <- white_space(trainingSet, "class")
+#Check
+as.character(trainingSet$marital.status[1:5])
+```
+Looks good, now lets add my new features and get rid of the ones I replace. 
+
+```{r, echo=T}
+trainingSet$US <- ifelse(trainingSet$native.country == "United-States", 1, 0)
+trainingSet$hs <- ifelse(trainingSet$education %in% less.than.hs, 0, 1)
+trainingSet$married <- ifelse(trainingSet$marital.status %in% married, 1, 0)
+trainingSet$more.than.forty <- ifelse(trainingSet$hours.per.week < 40, 0, 1)
+trainingSet$new.class <- ifelse(trainingSet$class == ">50K", "Greater", "Less") # caret does not like these names
+head(trainingSet, 10)
+
+```
+```{r, echo=T}
+trainingSet <- trainingSet %>% mutate_if(is.character,as.factor) #converting all character columns to factors
+glimpse(trainingSet)
+```
+
+```{r, echo=T}
+trainingSet <- subset(trainingSet, select = -c(marital.status, hours.per.week, native.country, education))
+head(trainingSet)
+```
+Ready to train our models, Random Forest and a Neural Network, but need to convert the factor names to another label for caret to use it correctly:
+
+```{r}
+trainingSet <- subset(trainingSet, select = -class) #so it doesnt become a predictor
+head(trainingSet, 10)
+```
+
+
+```{r, echo=T}
+#Random Forest Model
+
+#Setting up the grid for Random Forest
+rfGrid <- expand.grid(mtry = seq(from = 2, to = 16, by = 2))
+
+control <- trainControl(method = "repeatedcv",
+                     number=3, 
+                     repeats=3,
+                     classProbs = TRUE,
+                     summaryFunction = twoClassSummary,
+                     verboseIter = FALSE,
+                     savePredictions = TRUE,
+                     sampling = "smote")
+
+rf.model <- train(new.class ~ ., data = trainingSet,
+                   method = "rf", 
+                   metric = "ROC", #Try ROC instead of accuracy
+                   preProcess = c("range"), #scales between 0 and 1
+                   na.action = na.omit,
+                   trControl = control,
+                   tuneGrid = rfGrid)
+                   
+rf.model 
+
+```
+This model shows that mtry=10 had the highest ROC at 90.17% 
+
+Now, in order to see how it does on the test data, I will create the same features, but this time, I wont worry about the white space since I will just remove those columns anyway
+
+```{r, echo=T}
+less.than.hs.space <- c(" Preschool", " 1st-4th", " 5th-6th", " 7th-8th", " 9th", " 10th", " 11th", " 12th")
+married.space <- c(" Married-AF-spouse"," Married-civ-spouse", " Married-spouse-absent")
+testSet$US <- ifelse(testSet$native.country == " United-States", 1, 0)
+testSet$hs <- ifelse(testSet$education %in% less.than.hs.space, 0, 1)
+testSet$married <- ifelse(testSet$marital.status %in% married.space, 1, 0)
+testSet$more.than.forty <- ifelse(testSet$hours.per.week < 40, 0, 1)
+testSet$new.class <- ifelse(testSet$class == " >50K.", "Greater", "Less") # caret does not like these names
+testSet$new.class <- as.factor(testSet$new.class)
+head(testSet, 25)
+```
+Ok, so now we should have all the features engineered, now I am going to remove the old features
+
+```{r, echo=T}
+testSet <- subset(testSet, select = -c(marital.status, hours.per.week, native.country, education, class))
+head(testSet)
+```
+Now, lets run the initial model against the test data to see if we didnt overfit or do anything way off. 
+
+```{r, echo=T}
+library(pROC)
+
+test_the_roc <- function(model, data) {
+  
+  roc(data$new.class,
+      predict(model, data, type = "prob")[, "Greater"])
+  
+}
+
+rf.model %>%
+  test_the_roc(data = testSet) %>%
+  auc()
+
+pred <- predict(rf.model, testSet)
+
+confusionMatrix(pred, testSet$new.class)
+plot(varImp(rf.model, scale = FALSE))
+```
+
+Our test data had a higher ROC than an accuracy, which was a little surprising. I thought the accuracy might be overly optimistic as a metric because of the slight imbalance to the new.class factor and that the ROC would the more accurate estimator of the test data. What was also interesting was that the model was able to predict the <=50K category way more readily than the >50K category, which it had a much tougher time with (about 2:1 correct:incorrect). It looks like the model used the newly created marriage feature as the biggest predictor, which was consistent with my initial hypothesis. Overall, this isnt a bad model, but I thought we might do better on the first run. Let's see how the neural network does. 
+
+```{r, echo=T}
+nnetGrid <-  expand.grid(size = seq(from = 1, to = 3, by = 1),
+                         decay = seq(from = 0.1, to = 0.3, by = 0.1))
+
+nnet.model <- train(new.class ~ ., data = trainingSet,
+                   method = "nnet", 
+                   metric = "ROC", #Try ROC instead of accuracy
+                   preProcess = c("range"), #scales between 0 and 1
+                   na.action = na.omit,
+                   trControl = control,
+                   tuneGrid = nnetGrid)
+                   
+nnet.model 
+
+```
+The best combination for the neural network was size=3 and decay=0.1 with a ROC of 0.8959. Ok, now lets see if it predicts the test data with the same accuracy. 
+
+```{r, echo=T}
+
+nnet.model %>%
+  test_the_roc(data = testSet) %>%
+  auc()
+
+pred <- predict(nnet.model, testSet)
+
+confusionMatrix(pred, testSet$new.class)
+plot(varImp(nnet.model, scale = FALSE))
+```
+Somehow, this model did not perform any better, but was actually a little worse. I kept the tuning parameters down to keep computation time down, so I would likely change those to optimize the model next in this case. Again, not a bad model, but thought I would do much better initially. 
+
+Overall, I would also go back and perhaps assign some of the other factors as dummy variables if I had access to more compuational speed, power and time. I might also think about trying either PCA as a scaling method (inside caret) or other algorithms too (Naive Bayes) as a way to increase accuracy and/or ROC. I suspect that Naive Bayes may be a good algorithm for this as many of these features likely have some relationships between one another. The data did not have one or two clear features to me that were demonstrating significant differences between the two categories, which may suggest that this is close to the peak predictive power these models may generate without significant feature alteration or addition, but at the next run, Id try some more optimization as well as feature engineering to see if I can improve the metric score. 
