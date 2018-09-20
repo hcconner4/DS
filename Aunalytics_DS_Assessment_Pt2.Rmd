@@ -1,7 +1,9 @@
 ---
 title: "Aunalytics Data Science Assessment, Part 2"
-output: html_notebook
-author: H. Clay Conner
+author: "H. Clay Conner"
+output:
+  html_document:
+    df_print: paged
 ---
 This is a Data Science Assessment for Aunalytics. 
 
@@ -13,7 +15,7 @@ I am doing this assessment in R, using an R Notebook.
 
 Note: I have not done a segmentation study prior to this. I looked at some online resources as to how to do this, but I am not quite sure the extent of what is typically expected. My general strategy was to perform an unsupervised learning study and see if/how the data can be segmented into clearly defined groups. 
 
-```{r}
+```{r, echo=T}
 # Load the necessary packages
 library(tidyverse)
 library(gplots)
@@ -87,11 +89,13 @@ This did not distinguish the classes as well as I would have initially thought. 
 
 The first is that I am going to try k between 1 and 5, and then also use the nstart parameter set to 25 which will allow R to bounce the centroids around 25 times to find the best one. Hopefully, I can find one k value that stands above the rest, and this could be shown using an elbow (sum of squares distance) plot, which I plan to do next.  
 
-```{r, echo=T}
+```{r, echo=T, warning=F}
+clust <- list()
 for(i in 1:5) {
-  clust <- kmeans(mat.trainingSet, i, nstart = 25)
-  print(table(clust$cluster, as.data.frame(mat.trainingSet)$class))
-  print(prop.table(table(clust$cluster, as.data.frame(mat.trainingSet)$class)))
+  myclust <- kmeans(mat.trainingSet, i, nstart = 25)
+  print(table(myclust$cluster, as.data.frame(mat.trainingSet)$class))
+  print(prop.table(table(myclust$cluster, as.data.frame(mat.trainingSet)$class)))
+  clust[[i]] <- myclust
 }
 
 ```
@@ -100,11 +104,11 @@ I am not sure this clarified anything for me. At least when k = 1:5, there is no
 
 ```{r, echo=T}
 
-plot.1 <- fviz_cluster(clust1, geom = "point", data = mat.trainingSet) + ggtitle("k = 1")
-plot.2 <- fviz_cluster(clust2, geom = "point",  data = mat.trainingSet) + ggtitle("k = 2")
-plot.3 <- fviz_cluster(clust3, geom = "point",  data = mat.trainingSet) + ggtitle("k = 3")
-plot.4 <- fviz_cluster(clust4, geom = "point",  data = mat.trainingSet) + ggtitle("k = 4")
-plot.5 <- fviz_cluster(clust5, geom = "point",  data = mat.trainingSet) + ggtitle("k = 5")
+plot.1 <- fviz_cluster(clust[[1]], geom = "point", data = mat.trainingSet) + ggtitle("k = 1")
+plot.2 <- fviz_cluster(clust[[2]], geom = "point",  data = mat.trainingSet) + ggtitle("k = 2")
+plot.3 <- fviz_cluster(clust[[3]], geom = "point",  data = mat.trainingSet) + ggtitle("k = 3")
+plot.4 <- fviz_cluster(clust[[4]], geom = "point",  data = mat.trainingSet) + ggtitle("k = 4")
+plot.5 <- fviz_cluster(clust[[5]], geom = "point",  data = mat.trainingSet) + ggtitle("k = 5")
 
 
 plot_grid(plot.1, plot.2, plot.3, plot.4, plot.5, ncol = 2)
